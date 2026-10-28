@@ -1,1 +1,142 @@
-<!doctype html><title>t</title>ok
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rooms</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+  <symbol id="i-mic-off" viewBox="0 0 24 24"><path d="M9 9v3a3 3 0 0 0 5.1 2.1M15 10V6a3 3 0 0 0-6 0"/><path d="M5 11a7 7 0 0 0 11.3 5.5M19 11a7 7 0 0 1-.6 2.8M12 18v3M3 3l18 18"/></symbol>
+  <symbol id="i-cam" viewBox="0 0 24 24"><rect x="3" y="7" width="13" height="10" rx="2"/><path d="M16 11l5-3v8l-5-3z"/></symbol>
+  <symbol id="i-cam-off" viewBox="0 0 24 24"><path d="M16 11l5-3v8l-5-3zM8 7h6a2 2 0 0 1 2 2v6M3 9v6a2 2 0 0 0 2 2h8M3 3l18 18"/></symbol>
+  <symbol id="i-screen" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></symbol>
+  <symbol id="i-people" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17" cy="9" r="3"/><path d="M16 15.5a5.5 5.5 0 0 1 5.5 4.5"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.8" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.8" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-leave" viewBox="0 0 24 24"><path d="M3.5 13.5C8.2 9 15.8 9 20.5 13.5l-2.3 2.6c-1-.8-2.1-1.4-3.4-1.7v-2.6a9 9 0 0 0-5.6 0v2.6c-1.3.3-2.4.9-3.4 1.7z"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 16v6M7 16h10l-1.5-5V5h1V3h-9v2h1v6z"/></symbol>
+  <symbol id="i-hand" viewBox="0 0 24 24"><path d="M8 12V5.5a1.5 1.5 0 0 1 3 0V11M11 11V4.5a1.5 1.5 0 0 1 3 0V11M14 11V5.5a1.5 1.5 0 0 1 3 0V13M17 13V8.5a1.5 1.5 0 0 1 3 0V15a7 7 0 0 1-7 7h-1.5a6 6 0 0 1-4.8-2.4L3.5 15a1.6 1.6 0 0 1 2.5-2l2 2.4"/></symbol>
+</svg>
+
+<!-- Lobby -->
+<section id="lobby" class="screen lobby">
+  <div class="lobby-card">
+    <div class="preview">
+      <video id="preview-video" autoplay playsinline muted></video>
+      <div class="preview-off" id="preview-off">
+        <div class="avatar big" id="preview-avatar">?</div>
+        <span id="preview-msg">Camera is off</span>
+      </div>
+      <div class="preview-controls">
+        <button class="ctl" id="lobby-mic" type="button" aria-pressed="true" title="Microphone (⌘D)">
+          <svg class="ico ico-on"><use href="#i-mic"/></svg><svg class="ico ico-off"><use href="#i-mic-off"/></svg></button>
+        <button class="ctl" id="lobby-cam" type="button" aria-pressed="true" title="Camera (⌘E)">
+          <svg class="ico ico-on"><use href="#i-cam"/></svg><svg class="ico ico-off"><use href="#i-cam-off"/></svg></button>
+      </div>
+    </div>
+    <form class="lobby-form" id="lobby-form">
+      <h1 id="lobby-title">Ready to join?</h1>
+      <p class="muted" id="lobby-meta">Checking the meeting…</p>
+      <label class="field"><span>Your name</span><input id="name" maxlength="40" autocomplete="name" placeholder="How others see you" required></label>
+      <div class="devices">
+        <label class="field"><span>Microphone</span><select id="sel-mic"></select></label>
+        <label class="field"><span>Camera</span><select id="sel-cam"></select></label>
+        <label class="field" id="field-spk"><span>Speakers</span><select id="sel-spk"></select></label>
+      </div>
+      <button class="primary" id="join" type="submit">Join now</button>
+      <p class="hint" id="lobby-hint"></p>
+    </form>
+  </div>
+</section>
+
+<!-- Call -->
+<section id="call" class="screen call hidden">
+  <header class="topbar">
+    <button class="roomcode" id="copy-link" type="button" title="Copy meeting link"><svg class="ico"><use href="#i-link"/></svg><span id="room-title"></span></button>
+    <span class="timer" id="timer">00:00</span>
+    <span class="net" id="net" title="Connection quality">connecting</span>
+  </header>
+  <div class="body">
+    <main class="media" id="media">
+      <div class="stage hidden" id="stage"></div>
+      <div class="grid" id="grid"></div>
+    </main>
+    <aside class="panel hidden" id="panel" aria-label="Side panel">
+      <div class="panel-tabs">
+        <button type="button" data-tab="chat" class="active">Chat</button>
+        <button type="button" data-tab="people">People <span class="count" id="people-count">1</span></button>
+        <button type="button" class="close" id="panel-close" title="Close">×</button>
+      </div>
+      <div class="tab" id="tab-chat">
+        <div class="chat-list" id="chat-list"><div class="chat-empty" id="chat-empty">Messages are only visible to people in the call and vanish when it ends.</div></div>
+        <form class="chat-form" id="chat-form">
+          <input id="chat-input" placeholder="Send a message" maxlength="2000" autocomplete="off">
+          <button type="submit">Send</button>
+        </form>
+      </div>
+      <div class="tab hidden" id="tab-people"><ul class="people" id="people"></ul></div>
+    </aside>
+  </div>
+  <footer class="bar">
+    <div class="bar-left" id="bar-left"></div>
+    <div class="bar-center">
+      <button class="ctl" id="btn-mic" type="button" aria-pressed="true" title="Microphone (⌘D)">
+        <svg class="ico ico-on"><use href="#i-mic"/></svg><svg class="ico ico-off"><use href="#i-mic-off"/></svg></button>
+      <button class="ctl" id="btn-cam" type="button" aria-pressed="true" title="Camera (⌘E)">
+        <svg class="ico ico-on"><use href="#i-cam"/></svg><svg class="ico ico-off"><use href="#i-cam-off"/></svg></button>
+      <button class="ctl" id="btn-share" type="button" title="Present your screen"><svg class="ico"><use href="#i-screen"/></svg></button>
+      <button class="ctl" id="btn-hand" type="button" title="Raise hand"><svg class="ico"><use href="#i-hand"/></svg></button>
+      <button class="ctl" id="btn-more" type="button" title="Settings"><svg class="ico"><use href="#i-more"/></svg></button>
+      <button class="ctl leave" id="btn-leave" type="button" title="Leave call"><svg class="ico"><use href="#i-leave"/></svg></button>
+    </div>
+    <div class="bar-right">
+      <button class="ctl ghost" id="btn-chat" type="button" title="Chat"><svg class="ico"><use href="#i-chat"/></svg><span class="badge" id="chat-badge"></span></button>
+      <button class="ctl ghost" id="btn-people" type="button" title="People"><svg class="ico"><use href="#i-people"/></svg><span class="badge" id="people-badge"></span></button>
+    </div>
+  </footer>
+  <div id="audio-sink" hidden></div>
+</section>
+
+<!-- Left -->
+<section id="left" class="screen left hidden">
+  <h1 id="left-title">You left the meeting</h1>
+  <p class="muted" id="left-msg"></p>
+  <div class="row">
+    <button class="primary" id="rejoin" type="button">Rejoin</button>
+    <a class="secondary" href="/" style="display:inline-flex;align-items:center;text-decoration:none">Return to home</a>
+  </div>
+</section>
+
+<dialog id="settings">
+  <div class="dlg-head"><h2>Settings</h2><button type="button" id="settings-close" title="Close">×</button></div>
+  <div class="dlg-body">
+    <h3>Devices</h3>
+    <label class="field"><span>Microphone</span><select id="set-mic"></select></label>
+    <label class="field"><span>Camera</span><select id="set-cam"></select></label>
+    <label class="field" id="set-field-spk"><span>Speakers</span><select id="set-spk"></select></label>
+    <h3>Quality &amp; CPU</h3>
+    <div class="row2">
+      <label class="field"><span>Camera quality</span>
+        <select id="set-quality"><option value="">Host default</option><option value="low">Low · 180p</option><option value="medium">Medium · 360p</option><option value="high">High · 720p</option></select></label>
+      <label class="field"><span>Screen share frame rate</span>
+        <select id="set-sharefps"><option value="0">Host default</option><option value="5">5 fps · slides</option><option value="10">10 fps</option><option value="15">15 fps</option><option value="30">30 fps · video</option></select></label>
+    </div>
+    <label class="toggle"><span>Audio only<small>Stop receiving camera video. Screen shares still show.</small></span><input type="checkbox" id="set-audioonly"></label>
+    <label class="toggle"><span>Prefer hardware codec (H.264)<small>Lower CPU on Macs. Applies to new connections.</small></span><input type="checkbox" id="set-h264"></label>
+    <label class="toggle"><span>Hide my own tile</span><input type="checkbox" id="set-hideself"></label>
+    <label class="toggle"><span>Join &amp; message sounds</span><input type="checkbox" id="set-sounds"></label>
+    <label class="toggle"><span>Show connection stats on tiles</span><input type="checkbox" id="set-stats"></label>
+    <h3>Shortcuts</h3>
+    <p class="muted" style="margin:0"><span class="kbd">⌘/Ctrl D</span> mic &nbsp; <span class="kbd">⌘/Ctrl E</span> camera &nbsp; <span class="kbd">Esc</span> close panel</p>
+  </div>
+</dialog>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<script src="/room.js"></script>
+</body>
+</html>

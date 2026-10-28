@@ -1,1 +1,29 @@
-<!doctype html><title>t</title>ok
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rooms</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main class="screen home">
+  <div class="home-card">
+    <div class="brand"><span class="dot"></span><span id="server-name">Rooms</span></div>
+    <h1>Video calls that don't eat your laptop.</h1>
+    <p class="lead">Audio, video, screen share and chat, peer-to-peer. Nothing is recorded or relayed through a server.</p>
+    <div class="home-actions">
+      <button class="primary" id="new" type="button">New meeting</button>
+      <form class="home-join" id="join-form">
+        <input class="input" id="code" placeholder="Enter a code or link" autocomplete="off" spellcheck="false" aria-label="Meeting code or link">
+        <button class="secondary" type="submit">Join</button>
+      </form>
+    </div>
+    <p class="hint" id="hint"></p>
+    <p class="home-foot">Works in Chrome, Edge, Firefox and Safari on a computer. Up to <span id="max">8</span> people per meeting.</p>
+  </div>
+</main>
+<script src="/home.js"></script>
+</body>
+</html>
