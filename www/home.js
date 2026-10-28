@@ -16,7 +16,7 @@
     document.title = cfg.serverName || "Rooms";
     $("max").textContent = cfg.maxPeers;
     if (!cfg.allowCreate) {
-      $("new").hidden = true;
+      $("new").classList.add("hidden");
       hint.textContent = "Only the host can create meetings here. Paste the link or code you were given.";
     }
   }).catch(() => { hint.textContent = "Server unreachable."; hint.className = "hint error"; });
