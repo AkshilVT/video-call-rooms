@@ -1,0 +1,9 @@
+[project]
+name = "video-call-rooms"
+version = "0.1.0"
+description = "Lightweight peer-to-peer video rooms (Google Meet replacement) — stdlib only."
+requires-python = ">=3.9"
+dependencies = []
+
+[tool.uv]
+package = false
