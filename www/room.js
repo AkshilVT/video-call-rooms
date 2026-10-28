@@ -205,7 +205,7 @@
   function onDisconnected() {
     stopPing();
     if (S.leaving || S.phase === "left") return;
-    if (S.phase === "lobby") { lobbyError("Could not reach the meeting server. Try again."); return; }
+    if (S.phase === "lobby") { if (!S.lobbyErrorShown) lobbyError("Could not reach the meeting server. Try again."); return; }
     S.wsTries++;
     if (S.wsTries === 1) toast("Connection lost. Reconnecting…", "warn", 4000);
     if (S.wsTries > 12) { leave("Lost the connection to the meeting server.", "Connection lost"); return; }
@@ -225,7 +225,7 @@
     switch (m.type) {
       case "welcome": return onWelcome(m);
       case "error": {
-        if (S.phase === "lobby") lobbyError(m.message || m.code);
+        if (S.phase === "lobby") { S.lobbyErrorShown = true; lobbyError(m.message || m.code); }
         else if (m.code === "slow-down") toast(m.message, "warn");
         else toast(m.message || m.code, "error");
         return;
@@ -275,7 +275,7 @@
     $("room-title").textContent = (S.room && S.room.label) || code;
     document.title = ((S.room && S.room.label) || code) + " · " + ((S.config && S.config.serverName) || "Rooms");
     $("bar-left").textContent = $("name").value.trim();
-    try { S.audioCtx = S.audioCtx || new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { S.audioCtx = null; }
+    ensureAudioCtx();
     setupLocalAnalyser();
     const preview = $("preview-video"); preview.srcObject = null;
     ensureSelfTile(); renderSelf();
@@ -568,6 +568,7 @@
     const media = $("media"), grid = $("grid");
     const target = stageTarget();
     media.classList.toggle("staged", !!target);
+    document.body.classList.toggle("staged", !!target);
     renderStage(target);
     const tiles = [...grid.children].filter((t) => !t.classList.contains("hidden"));
     const n = tiles.length;
@@ -612,6 +613,12 @@
   }
 
   // ------------------------------------------------------------- speaking & stats
+  function ensureAudioCtx() {
+    try {
+      if (!S.audioCtx) S.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (S.audioCtx.state === "suspended" && S.audioCtx.resume) S.audioCtx.resume().catch(() => {});
+    } catch (e) { S.audioCtx = null; }
+  }
   function setupLocalAnalyser() {
     if (!S.audioCtx || !S.local.mic || S.analyser) return;
     try {
@@ -798,7 +805,9 @@
       if (!name) { $("name").focus(); return; }
       prefs.name = name; LS.set("name", name);
       $("join").disabled = true; $("join").textContent = "Joining…"; $("lobby-hint").textContent = ""; $("lobby-hint").className = "hint";
-      S.wsTries = 0; connect();
+      S.wsTries = 0; S.lobbyErrorShown = false;
+      ensureAudioCtx();                                   // inside the click: Safari needs a gesture
+      connect();
     });
     $("btn-mic").addEventListener("click", toggleMic);
     $("btn-cam").addEventListener("click", toggleCam);
@@ -833,6 +842,7 @@
       } else if (e.key === "Escape" && S.phase === "call" && S.panelOpen && !$("settings").open) closePanel();
     });
     document.addEventListener("visibilitychange", () => { if (S.phase === "call") sendWants(); });
+    document.addEventListener("click", () => { if (S.audioCtx && S.audioCtx.state === "suspended") ensureAudioCtx(); }, true);
     window.addEventListener("pagehide", () => { if (S.phase === "call") { send({ type: "leave" }); } });
     window.addEventListener("resize", layout);
     if (window.ResizeObserver) new ResizeObserver(() => layout()).observe($("media"));

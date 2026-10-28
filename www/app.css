@@ -199,6 +199,7 @@ svg.ico { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-wi
 .toasts { position: fixed; left: 16px; bottom: calc(var(--bar-h) + 10px); display: flex; flex-direction: column; gap: 8px; z-index: 50; pointer-events: none; max-width: min(360px, calc(100vw - 32px)); }
 .toast { background: var(--raised); border: 1px solid var(--line); color: var(--text); padding: 10px 14px; border-radius: 10px; font-size: 13px; box-shadow: 0 6px 20px rgba(0,0,0,.35); animation: toast-in .18s ease-out; overflow-wrap: anywhere; }
 .toast.warn { border-color: var(--warn); } .toast.error { border-color: var(--danger); }
+body.staged .toasts { bottom: calc(var(--bar-h) + 128px); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 /* ---- settings dialog ---- */

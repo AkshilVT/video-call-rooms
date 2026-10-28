@@ -26,13 +26,13 @@ try {
   // preview mode must stay static
   await page.goto(EMBED + "?_preview=1");
   await sleep(1500);
-  const frame = page.frames().find((f) => f.url().includes("index.html")) || page.mainFrame();
+  const frame = page.frames().find((f) => f.url().includes("/render?path=")) || page.mainFrame();
   check(await frame.locator("#preview-note").isVisible(), "preview mode shows static placeholder");
   check(!/Running|Stopped/.test(await frame.locator("#pill").textContent()), "preview mode does not call ctl.py");
 
   await page.goto(EMBED);
   await page.waitForLoadState("networkidle");
-  const f = page.frames().find((fr) => fr.url().includes("index.html")) || page.mainFrame();
+  const f = page.frames().find((fr) => fr.url().includes("/render?path=")) || page.mainFrame();
   await waitText(f, "#pill", /Stopped|Running/);
   check(true, "console loaded with live status: " + (await f.locator("#pill").textContent()));
   if (/Running/.test(await f.locator("#pill").textContent())) { await f.click("#btn-stop"); await waitText(f, "#pill", /Stopped/); }
