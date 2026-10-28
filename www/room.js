@@ -320,7 +320,7 @@
     makeTile(peer);
     createPC(peer, initiator);
     if (peer.state.screen) notePresenter(peer.id, true);
-    if (!document.hidden && (prefs.audioOnly || document.hidden)) send({ type: "want", to: peer.id, cam: false, screen: true });
+    if (prefs.audioOnly || document.hidden) send({ type: "want", to: peer.id, cam: !prefs.audioOnly && !document.hidden, screen: !document.hidden });
     renderPeople(); updateBadges(); layout();
     for (const p of S.peers.values()) applyParams(p);   // scale down as the call grows
   }
@@ -403,8 +403,8 @@
   }
   function applyParams(peer) {
     if (!peer.pc || peer.pc.connectionState === "closed") return;
-    const n = S.peers.size;
-    const scale = n <= 2 ? 1 : n <= 4 ? 1.5 : 2;
+    const total = S.peers.size + 1;                       // people in the call, me included
+    const scale = total <= 4 ? 1 : total <= 6 ? 1.5 : 2;  // protect CPU as the mesh grows
     const p = preset();
     setParams(peer.tx.cam, { maxBitrate: Math.round(p.bitrate / (scale * scale) * 1.25), maxFramerate: p.fps, scaleResolutionDownBy: scale, active: peer.wantCam }, "balanced");
     setParams(peer.tx.screen, { maxBitrate: SHARE_BITRATE, maxFramerate: shareFps(), scaleResolutionDownBy: 1, active: peer.wantScreen }, "maintain-resolution");

@@ -2,59 +2,353 @@
 <html data-fused-theme="shell">
 <head>
 <meta charset="utf-8" />
-<!-- Declares this page a fused app's entry — keep it near the top of <head>
-     (detection reads only the first 4 KiB). -->
 <meta name="fused-app" />
-<!-- The fused page API version this app was authored against (see
-     fused_render/fused_api_version.py). The app page offers a "Migrate"
-     task when the runtime has moved past it. -->
 <meta name="fused-api-version" content="1" />
 <meta name="fused-app-id" content="video-call-rooms-41ae08b5" />
-<title>New app</title>
+<title>Rooms</title>
 <style>
-  /* --fused-* come from the shell (colour preset + light/dark); the literals are
-     the standalone fallbacks. See the fused-render-theming skill. */
-  :root       { color-scheme: dark;  --bg: var(--fused-bg, #101318); --text: var(--fused-fg, #dce2ea); --muted: var(--fused-fg-muted, #9aa0a6); --line: var(--fused-border, #2a303a); }
-  :root[data-theme="light"]
-              { color-scheme: light; --bg: var(--fused-bg, #f7f8fa); --text: var(--fused-fg, #1a1f27); --muted: var(--fused-fg-muted, #5f6672); --line: var(--fused-border, #d8dce3); }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    font-size: 14px;
-    color: var(--text);
-    background: var(--bg);
-  }
-  main { max-width: 640px; margin: 0 auto; padding: 48px 24px; }
-  h1 { font-size: 18px; margin: 0 0 12px; }
-  p  { color: var(--muted); line-height: 1.5; }
-  code {
-    font-family: ui-monospace, Menlo, Consolas, monospace;
-    font-size: 12px;
-    border: 1px solid var(--line);
-    border-radius: 4px;
-    padding: 1px 5px;
-  }
+  :root { color-scheme: dark;
+    --bg: var(--fused-bg, #101318); --bg-alt: var(--fused-bg-alt, #151921); --panel: var(--fused-bg-panel, #171b23);
+    --text: var(--fused-fg, #dce2ea); --muted: var(--fused-fg-muted, #9aa0a6); --faint: var(--fused-fg-faint, #6b7280);
+    --line: var(--fused-border, #2a303a); --sel: var(--fused-sel, #1f2633); --accent: var(--fused-accent, #4f8cff);
+    --on-accent: var(--fused-on-accent, #ffffff); --error: var(--fused-error, #e5484d); --ok: var(--fused-success, #30b46c); --warn: var(--fused-warning, #f0a63a); }
+  :root[data-theme="light"] { color-scheme: light;
+    --bg: var(--fused-bg, #f7f8fa); --bg-alt: var(--fused-bg-alt, #eef0f4); --panel: var(--fused-bg-panel, #ffffff);
+    --text: var(--fused-fg, #1a1f27); --muted: var(--fused-fg-muted, #5f6672); --faint: var(--fused-fg-faint, #8a909b);
+    --line: var(--fused-border, #d8dce3); --sel: var(--fused-sel, #e8ecf3); --accent: var(--fused-accent, #2f6fe4);
+    --on-accent: var(--fused-on-accent, #ffffff); --error: var(--fused-error, #d13438); --ok: var(--fused-success, #1f9d55); --warn: var(--fused-warning, #b8720a); }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; }
+  button, input, select, textarea { font: inherit; color: inherit; margin: 0; }
+  button { background: none; border: 0; padding: 0; cursor: pointer; }
+  button:disabled { cursor: default; opacity: .5; }
+  ::placeholder { color: var(--muted); opacity: 1; }
+  input, select, textarea, progress { accent-color: var(--accent, currentColor); }
+  img, svg, video, canvas { display: block; max-width: 100%; }
+  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--text); background: var(--bg); }
+  main { max-width: 880px; margin: 0 auto; padding: 28px 24px 60px; display: flex; flex-direction: column; gap: 16px; }
+  .top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .top h1 { font-size: 20px; margin: 0; display: flex; align-items: center; gap: 10px; }
+  .top h1 svg { width: 26px; height: 26px; }
+  .pill { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+  .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .pill.on { color: var(--text); } .pill.on::before { background: var(--ok); }
+  .pill.busy::before { background: var(--warn); }
+  .top .actions { margin-left: auto; display: flex; gap: 8px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .card h2 { margin: 0; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  .card h2 small { color: var(--muted); font-weight: 400; font-size: 12px; }
+  .muted { color: var(--muted); } .small { font-size: 12px; } p { margin: 0; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
+  .btn { height: 34px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg-alt); color: var(--text); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .btn:hover:not(:disabled) { background: var(--sel); }
+  .btn.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+  .btn.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
+  .btn.danger { color: var(--error); }
+  .btn.sm { height: 28px; padding: 0 10px; font-size: 12px; font-weight: 500; }
+  .link { flex: 1 1 260px; min-width: 0; height: 38px; display: flex; align-items: center; padding: 0 12px; border-radius: 8px; background: var(--bg-alt); border: 1px solid var(--line);
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; -webkit-user-select: all; user-select: all; }
+  .link.empty { color: var(--faint); font-family: inherit; -webkit-user-select: none; user-select: none; }
+  .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .field > span { font-size: 12px; color: var(--muted); }
+  .field input, .field select { height: 34px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg-alt); color: var(--text); width: 100%; min-width: 0; outline: none; }
+  .field input:focus, .field select:focus { border-color: var(--accent); }
+  .field select { appearance: none; -webkit-appearance: none; padding-right: 30px; cursor: pointer;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path d='M1 1l5 5 5-5' fill='none' stroke='%239aa0a6' stroke-width='1.8'/></svg>"); background-repeat: no-repeat; background-position: right 10px center; }
+  .check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+  .check input { width: 16px; height: 16px; margin-top: 3px; flex: 0 0 auto; }
+  .check small { display: block; color: var(--muted); font-size: 12px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+  .grid3 { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 12px 16px; }
+  @media (max-width: 640px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+  td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  tr:last-child td { border-bottom: 0; }
+  td.code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; white-space: nowrap; }
+  td .name { font-weight: 600; }
+  td .who { color: var(--muted); font-size: 12px; }
+  td.act { text-align: right; white-space: nowrap; }
+  .live { display: inline-flex; align-items: center; gap: 6px; }
+  .live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+  .empty { color: var(--faint); font-size: 13px; padding: 6px 0; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 13px; -webkit-user-select: none; user-select: none; list-style: none; display: inline-flex; align-items: center; gap: 6px; }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::before { content: "▸"; font-size: 11px; } details[open] summary::before { content: "▾"; }
+  pre { margin: 8px 0 0; padding: 10px 12px; background: var(--bg-alt); border: 1px solid var(--line); border-radius: 8px; font: 11px/1.45 ui-monospace, Menlo, Consolas, monospace; max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+    scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+  pre::-webkit-scrollbar { width: 8px; } pre::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+  ul.why { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; display: grid; gap: 4px; }
+  .toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 10; max-width: min(380px, calc(100vw - 32px)); }
+  .toast { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent); padding: 10px 14px; border-radius: 8px; font-size: 13px; box-shadow: 0 6px 20px rgba(0,0,0,.25); overflow-wrap: anywhere; }
+  .toast.error { border-left-color: var(--error); } .toast.warn { border-left-color: var(--warn); } .toast.ok { border-left-color: var(--ok); }
+  .notice { padding: 10px 12px; border-radius: 8px; background: var(--bg-alt); border: 1px solid var(--line); font-size: 13px; }
+  .notice.warn { border-color: var(--warn); }
+  .hidden { display: none !important; }
+  kbd { font: 11px ui-monospace, Menlo, Consolas, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; color: var(--muted); }
 </style>
 </head>
 <body>
-  <!-- This is the app's entry view. The shell injects the `fused` runtime
-       (params, runPython, readFile, …) — no <script src> or network needed.
-       Replace everything below; see CLAUDE.md and .claude/skills/ for the
-       full authoring contract. -->
-  <main>
-    <h1>New fused-render app</h1>
-    <p>
-      Edit <code>index.html</code> to build this app. Put view state in
-      <code>fused.params</code> (it syncs to the URL), and compute with
-      <code>fused.runPython("./file.py", { ... })</code>.
-    </p>
-  </main>
-  <script>
-    // Params are the state; controls write params; onChange re-renders.
-    function draw() {}
-    fused.params.onChange(draw);
-    draw();
-  </script>
+<main>
+  <header class="top">
+    <h1><svg viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#0e1014"/><rect x="10" y="18" width="30" height="26" rx="6" fill="#4f8cff"/><path d="M40 27l14-7v24l-14-7z" fill="#4f8cff"/><circle cx="18" cy="26" r="3" fill="#0e1014"/></svg>Rooms</h1>
+    <span class="pill" id="pill">Checking…</span>
+    <div class="actions">
+      <button class="btn primary" id="btn-start">Start server</button>
+      <button class="btn hidden" id="btn-stop">Stop</button>
+    </div>
+  </header>
+
+  <div class="notice hidden" id="preview-note">Open the app to start the server and manage meetings.</div>
+  <div class="notice warn hidden" id="nofused">This page needs the fused-render shell (it calls <code>ctl.py</code> through <code>fused.runPython</code>). Open it from fused-render.</div>
+
+  <section class="card" id="card-share">
+    <h2>Invite link <small id="share-sub"></small></h2>
+    <div class="row">
+      <div class="link empty" id="public-url">Start the server, then make it public to get a link.</div>
+      <button class="btn" id="btn-copy" disabled>Copy</button>
+      <button class="btn" id="btn-open" disabled>Open</button>
+    </div>
+    <div class="row">
+      <button class="btn primary" id="btn-tunnel">Make public</button>
+      <button class="btn hidden" id="btn-tunnel-stop">Stop public link</button>
+      <span class="muted small" id="tunnel-note">Cloudflare quick tunnel: HTTPS, no account, new random URL each time. Media stays peer-to-peer; only signaling and chat pass through.</span>
+    </div>
+    <details>
+      <summary>Other ways to reach the server</summary>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px" class="small muted">
+        <div>Host only: <span id="local-url" style="font-family:ui-monospace,Menlo,Consolas,monospace"></span> — works for you without a tunnel (localhost counts as secure).</div>
+        <div id="lan-line" class="hidden">Same network: <span id="lan-url" style="font-family:ui-monospace,Menlo,Consolas,monospace"></span> — self-signed certificate, colleagues must click through the browser warning once.</div>
+        <div>Own domain: put an HTTPS reverse proxy (Tailscale Serve, Caddy, nginx, a named Cloudflare tunnel) in front of the host-only address and enter its URL under Settings → Public URL.</div>
+        <div>Browsers only allow camera and microphone on HTTPS or localhost, which is why a plain <code>http://192.168.…</code> link does not work for guests.</div>
+      </div>
+    </details>
+  </section>
+
+  <section class="card" id="card-meetings">
+    <h2>Meetings <small>A meeting is a room code. Saved meetings keep their code across restarts.</small></h2>
+    <form class="row" id="new-form">
+      <input class="link" id="new-label" placeholder="Name, e.g. Daily standup (optional)" style="font-family:inherit;user-select:auto;-webkit-user-select:auto" maxlength="40">
+      <input class="link" id="new-code" placeholder="custom code (optional)" style="flex:0 1 200px" maxlength="40" pattern="[a-z0-9][a-z0-9-]{1,38}[a-z0-9]" title="lowercase letters, digits and dashes">
+      <button class="btn primary" type="submit" id="btn-new">New meeting</button>
+    </form>
+    <table id="rooms" class="hidden">
+      <thead><tr><th>Meeting</th><th>Code</th><th>In the call</th><th></th></tr></thead>
+      <tbody id="rooms-body"></tbody>
+    </table>
+    <div class="empty" id="rooms-empty">No meetings yet. Create one, copy its link, send it to your team.</div>
+  </section>
+
+  <section class="card" id="card-settings">
+    <h2>Settings</h2>
+    <div class="grid2">
+      <label class="field"><span>Server name (shown to guests)</span><input id="s-serverName" maxlength="60"></label>
+      <label class="field"><span>Port</span><input id="s-port" type="number" min="1024" max="65535"></label>
+      <label class="field"><span>Max people per meeting</span><select id="s-maxPeers"></select></label>
+      <label class="field"><span>Default camera quality</span>
+        <select id="s-camera"><option value="low">Low · 180p · least CPU</option><option value="medium">Medium · 360p (recommended)</option><option value="high">High · 720p</option></select></label>
+      <label class="field"><span>Default screen-share frame rate</span>
+        <select id="s-shareFps"><option value="5">5 fps · slides</option><option value="10">10 fps (recommended)</option><option value="15">15 fps</option><option value="30">30 fps · video</option></select></label>
+      <label class="field"><span>Public URL (own reverse proxy, optional)</span><input id="s-customPublicUrl" placeholder="https://rooms.example.com"></label>
+    </div>
+    <label class="check"><input type="checkbox" id="s-allowCreate"><span>Anyone with the server link can create meetings<small>Off: only you create meetings here; guests need a code.</small></span></label>
+    <label class="check"><input type="checkbox" id="s-autoTunnel"><span>Make public automatically when the server starts</span></label>
+    <label class="check"><input type="checkbox" id="s-lan"><span>LAN mode (advanced)<small>Listen on all interfaces with a self-signed HTTPS certificate so colleagues on the same network can join without a tunnel. Needs a restart.</small></span></label>
+    <details>
+      <summary>TURN relay (optional, for strict corporate NATs)</summary>
+      <div class="grid3" style="margin-top:8px">
+        <label class="field"><span>TURN URLs</span><input id="s-turn-urls" placeholder="turn:turn.example.com:3478, turns:…:443"></label>
+        <label class="field"><span>Username</span><input id="s-turn-username" autocomplete="off"></label>
+        <label class="field"><span>Credential</span><input id="s-turn-credential" type="password" autocomplete="off"></label>
+      </div>
+      <p class="small muted" style="margin-top:6px">Without TURN, two people who are both behind symmetric NAT cannot connect directly. Most home and office networks are fine with STUN alone.</p>
+    </details>
+    <div class="row">
+      <button class="btn primary" id="btn-save">Save settings</button>
+      <span class="small muted" id="save-note"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Why it's light</h2>
+    <ul class="why">
+      <li>Peer-to-peer WebRTC: no media server, no simulcast. Each person encodes one modest stream.</li>
+      <li>H.264 first, so Macs encode and decode in hardware instead of burning CPU on VP8/VP9.</li>
+      <li>360p/24 fps camera and 10 fps screen share by default; video scales down automatically as the call grows and pauses when a tab is hidden or in audio-only mode.</li>
+      <li>One HTML, one CSS, one JS file. No framework, no effects, no background blur, nothing phoning home.</li>
+      <li>Mesh means every extra person costs everyone a little more; it is designed for 2–8 people, not webinars.</li>
+    </ul>
+    <details>
+      <summary>Logs</summary>
+      <div class="row" style="margin-top:8px">
+        <button class="btn sm" data-log="server">Server</button><button class="btn sm" data-log="tunnel">Tunnel</button><button class="btn sm" data-log="stdout">Crashes</button>
+      </div>
+      <pre id="log">—</pre>
+    </details>
+  </section>
+</main>
+<div class="toasts" id="toasts"></div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const PY = "./ctl.py";
+  const hasFused = typeof fused !== "undefined" && fused && typeof fused.runPython === "function";
+  let st = null, busy = false, settingsDirty = false, settingsLoaded = false, pollTimer = 0;
+
+  function isPreview() {
+    if (new URLSearchParams(location.search).get("_preview") === "1") return true;
+    try { let w = window; while (w.parent && w.parent !== w) { w = w.parent; if (new URLSearchParams(w.location.search).get("_preview") === "1") return true; } }
+    catch (e) { /* cross-origin ancestor */ }
+    return false;
+  }
+  function toast(text, kind) {
+    const t = document.createElement("div"); t.className = "toast" + (kind ? " " + kind : ""); t.textContent = text;
+    $("toasts").appendChild(t); setTimeout(() => t.remove(), kind === "error" ? 9000 : 3500);
+  }
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); return true; } catch (e) { /* fallback */ }
+    const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select(); let ok = false; try { ok = document.execCommand("copy"); } catch (e) { ok = false; } ta.remove(); return ok;
+  }
+  const ago = (ms) => { const s = Math.max(0, (Date.now() - ms) / 1000); return s < 60 ? "just now" : s < 3600 ? Math.floor(s / 60) + " min ago" : s < 86400 ? Math.floor(s / 3600) + " h ago" : Math.floor(s / 86400) + " d ago"; };
+  const fmtUp = (s) => s < 60 ? s + "s" : s < 3600 ? Math.floor(s / 60) + " min" : (s / 3600).toFixed(1) + " h";
+
+  async function call(action, args, key) {
+    const params = Object.assign({ action }, args || {});
+    for (const k of Object.keys(params)) params[k] = String(params[k]);
+    return fused.runPython(PY, params, { key });
+  }
+  async function refresh() {
+    if (busy || document.hidden) return;
+    try { const r = await call("status", {}, "status"); if (!busy) { st = r; draw(); } }
+    catch (e) { if (e && e.message && !/abort|stale|cancel/i.test(e.message)) console.warn("status", e); }
+  }
+  async function act(action, args, label) {
+    if (busy) return null;
+    busy = true; setBusy(label);
+    try {
+      const r = await call(action, args, "action");
+      st = r; draw();
+      if (!r.ok) toast(r.error || "Something went wrong", "error");
+      else if (r.note) toast(r.note, "warn");
+      return r;
+    } catch (e) { toast((e && e.message) || String(e), "error"); return null; }
+    finally { busy = false; setBusy(null); draw(); }
+  }
+  function setBusy(label) {
+    const p = $("pill");
+    if (label) { p.textContent = label; p.className = "pill busy"; }
+    document.querySelectorAll("button").forEach((b) => { if (b.dataset.log === undefined && b.id !== "btn-copy") b.disabled = !!label; });
+  }
+
+  function draw() {
+    if (!st) return;
+    const srv = st.server, tun = st.tunnel, s = st.settings;
+    const running = srv.running;
+    const pill = $("pill");
+    if (busy) { /* keep busy label */ }
+    else if (running && st.publicUrl) { pill.textContent = "Public · port " + srv.port + " · up " + fmtUp(srv.uptime || 0); pill.className = "pill on"; }
+    else if (running) { pill.textContent = "Running on port " + srv.port + " · host only"; pill.className = "pill on"; }
+    else { pill.textContent = srv.portFree === false ? "Stopped · port " + srv.port + " busy" : "Stopped"; pill.className = "pill"; }
+    $("btn-start").classList.toggle("hidden", running); $("btn-stop").classList.toggle("hidden", !running);
+    $("btn-start").disabled = busy;
+
+    // invite link
+    const url = running ? (st.publicUrl || "") : "";
+    const link = $("public-url");
+    if (url) { link.textContent = url; link.classList.remove("empty"); }
+    else { link.textContent = running ? "Host-only for now. Make it public to invite colleagues." : "Start the server, then make it public to get a link."; link.classList.add("empty"); }
+    $("btn-copy").disabled = !url; $("btn-open").disabled = !running;
+    $("share-sub").textContent = tun.running ? "via Cloudflare tunnel" : (url ? "via your own URL" : "");
+    const cf = !!(st.tools && st.tools.cloudflared);
+    $("btn-tunnel").classList.toggle("hidden", tun.running); $("btn-tunnel-stop").classList.toggle("hidden", !tun.running);
+    $("btn-tunnel").disabled = busy || !cf;
+    $("tunnel-note").textContent = cf
+      ? (tun.running ? "Public link is live. Anyone with a meeting link can join while it is up; stop it to go host-only again." : "Cloudflare quick tunnel: HTTPS, no account, new random URL each time. Media stays peer-to-peer; only signaling and chat pass through.")
+      : "cloudflared is not installed. In a terminal:  brew install cloudflared  — then come back here. Or set a Public URL in Settings.";
+    $("local-url").textContent = srv.localUrl || "";
+    $("lan-line").classList.toggle("hidden", !srv.lanUrl); $("lan-url").textContent = srv.lanUrl || "";
+
+    // meetings
+    const rooms = srv.rooms || [];
+    $("rooms").classList.toggle("hidden", !rooms.length); $("rooms-empty").classList.toggle("hidden", !!rooms.length);
+    $("rooms-empty").textContent = running ? "No meetings yet. Create one, copy its link, send it to your team." : "Start the server to create meetings.";
+    const body = $("rooms-body"); body.textContent = "";
+    const base = url || srv.localUrl;
+    rooms.forEach((r) => {
+      const tr = document.createElement("tr");
+      const td1 = document.createElement("td"); const n = document.createElement("div"); n.className = "name"; n.textContent = r.label || "Meeting"; td1.appendChild(n);
+      const w = document.createElement("div"); w.className = "who"; w.textContent = (r.saved ? "saved · " : "") + "created " + ago(r.created); td1.appendChild(w); tr.appendChild(td1);
+      const td2 = document.createElement("td"); td2.className = "code"; td2.textContent = r.code; tr.appendChild(td2);
+      const td3 = document.createElement("td");
+      if (r.peers.length) { const l = document.createElement("span"); l.className = "live"; l.textContent = r.peers.length + " · " + r.peers.map((p) => p.name).join(", "); td3.appendChild(l); }
+      else { td3.textContent = "—"; td3.className = "muted"; }
+      tr.appendChild(td3);
+      const td4 = document.createElement("td"); td4.className = "act";
+      const link = base + "/r/" + r.code;
+      const b1 = mk("Copy link", async () => toast((await copyText(link)) ? "Link copied" : link, "ok"));
+      const b2 = mk("Open", () => act("open", { url: link }, "Opening…"));
+      const b3 = mk("End", () => { if (confirm("End meeting " + r.code + "? Everyone in it is disconnected and the code is removed.")) act("close_room", { code: r.code }, "Ending…"); });
+      b3.classList.add("danger");
+      [b1, b2, b3].forEach((b) => { b.disabled = busy; td4.appendChild(b); td4.appendChild(document.createTextNode(" ")); });
+      tr.appendChild(td4); body.appendChild(tr);
+    });
+
+    // settings (do not clobber what the user is typing)
+    if (!settingsDirty && !settingsLoaded) { fillSettings(s); settingsLoaded = true; }
+  }
+  function mk(label, fn) { const b = document.createElement("button"); b.className = "btn sm"; b.type = "button"; b.textContent = label; b.addEventListener("click", fn); return b; }
+  function fillSettings(s) {
+    $("s-serverName").value = s.serverName || ""; $("s-port").value = s.port;
+    const mp = $("s-maxPeers"); if (!mp.options.length) for (let i = 2; i <= 16; i++) mp.appendChild(new Option(i + (i > 8 ? " (mesh gets heavy)" : ""), String(i)));
+    mp.value = String(s.maxPeers); $("s-camera").value = s.camera; $("s-shareFps").value = String(s.shareFps);
+    $("s-customPublicUrl").value = s.customPublicUrl || ""; $("s-allowCreate").checked = !!s.allowCreate; $("s-autoTunnel").checked = !!s.autoTunnel; $("s-lan").checked = !!s.lan;
+    const t = s.turn || {}; $("s-turn-urls").value = t.urls || ""; $("s-turn-username").value = t.username || ""; $("s-turn-credential").value = t.credential || "";
+  }
+  function readSettings() {
+    return {
+      serverName: $("s-serverName").value.trim() || "Rooms", port: Number($("s-port").value) || 8765, maxPeers: Number($("s-maxPeers").value) || 8,
+      camera: $("s-camera").value, shareFps: Number($("s-shareFps").value) || 10, customPublicUrl: $("s-customPublicUrl").value.trim(),
+      allowCreate: $("s-allowCreate").checked, autoTunnel: $("s-autoTunnel").checked, lan: $("s-lan").checked,
+      turn: { urls: $("s-turn-urls").value.trim(), username: $("s-turn-username").value.trim(), credential: $("s-turn-credential").value },
+    };
+  }
+
+  function wire() {
+    $("btn-start").addEventListener("click", () => act("start", {}, "Starting…"));
+    $("btn-stop").addEventListener("click", () => {
+      const live = st && st.server.rooms.some((r) => r.peers.length);
+      if (!live || confirm("People are in a call right now. Stop the server and end it?")) act("stop", {}, "Stopping…");
+    });
+    $("btn-tunnel").addEventListener("click", () => act("tunnel_start", {}, "Opening tunnel…"));
+    $("btn-tunnel-stop").addEventListener("click", () => act("tunnel_stop", {}, "Closing tunnel…"));
+    $("btn-copy").addEventListener("click", async () => { const u = st && st.publicUrl; if (u) toast((await copyText(u)) ? "Link copied" : u, "ok"); });
+    $("btn-open").addEventListener("click", () => { const base = (st && (st.publicUrl || st.server.localUrl)); if (base) act("open", { url: base }, "Opening…"); });
+    $("new-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const label = $("new-label").value.trim(), code = $("new-code").value.trim().toLowerCase();
+      const r = await act("new_room", { label, code }, "Creating…");
+      if (r && r.ok && r.room) { $("new-label").value = ""; $("new-code").value = ""; const base = st.publicUrl || st.server.localUrl; const link = base + "/r/" + r.room.code; toast((await copyText(link)) ? "Meeting created, link copied" : "Meeting created: " + link, "ok"); }
+    });
+    document.querySelectorAll("#card-settings input, #card-settings select").forEach((el) => el.addEventListener("input", () => { settingsDirty = true; $("save-note").textContent = "Unsaved changes"; }));
+    $("btn-save").addEventListener("click", async () => {
+      const r = await act("save_settings", { settings_json: JSON.stringify(readSettings()) }, "Saving…");
+      if (r && r.ok) { settingsDirty = false; fillSettings(r.settings); $("save-note").textContent = r.needsRestart ? "Saved. Port/LAN changes apply after Stop → Start." : "Saved."; if (r.needsRestart) toast("Restart the server to apply the port/LAN change", "warn"); }
+    });
+    document.querySelectorAll("[data-log]").forEach((b) => b.addEventListener("click", async () => {
+      try { const r = await call("logs", { which: b.dataset.log, lines: 120 }, "logs"); $("log").textContent = r.text || "(empty)"; } catch (e) { $("log").textContent = String(e.message || e); }
+    }));
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+  }
+
+  if (isPreview()) { $("preview-note").classList.remove("hidden"); $("pill").textContent = "Rooms"; $("pill").className = "pill"; return; }
+  if (!hasFused) { $("nofused").classList.remove("hidden"); $("pill").textContent = "No shell"; return; }
+  wire();
+  refresh();
+  pollTimer = setInterval(refresh, 4000);
+})();
+</script>
 </body>
 </html>
