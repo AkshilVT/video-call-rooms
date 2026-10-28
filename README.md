@@ -61,6 +61,9 @@ behind symmetric NAT they need a TURN relay: enter one under Settings.
 | `www/` | Guest client: `index.html` (landing), `room.html` + `room.js` (lobby + call), `app.css`. |
 | `tests/e2e.mjs` | Playwright end-to-end: 3 fake-media Chromium peers, Firefox interop, WebKit smoke. `cd tests && npm i && node e2e.mjs --firefox --webkit`. |
 | `tests/console.mjs` | Drives the host console inside fused-render. |
+| `tests/edge.mjs` | 6-person mesh and auto-downscale, audio-only pausing, creation disabled, room full, lost-offer recovery. |
+| `tests/protocol.mjs` | Raw-socket server tests: simultaneous-join ordering, fragment floods, request smuggling, reconnect tokens. |
+| `tests/tunnel.mjs` | Opens a real Cloudflare quick tunnel and joins through it (run by hand; publishes a temporary URL). |
 
 State: `.fused/data/settings.json`, `rooms.json` (saved codes), `server.json`
 (pid, port, admin token), `tunnel.json`. Logs: `.fused/cache/logs/`.
@@ -69,6 +72,8 @@ State: `.fused/data/settings.json`, `rooms.json` (saved codes), `server.json`
 
 - Rooms are protected by their code (10 random letters). The landing page can
   create rooms unless you turn that off in Settings.
+- Reconnecting under an existing participant id requires the resume token that
+  participant received, so nobody can evict someone else by replaying their id.
 - Admin endpoints (`/api/status`, `/api/admin/*`) need the random token in
   `server.json` and are refused through the tunnel.
 - Chat is kept in memory for late joiners (last 100 messages) and dropped when

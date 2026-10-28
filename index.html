@@ -251,8 +251,10 @@
     if (busy) { /* keep busy label */ }
     else if (running && st.publicUrl) { pill.textContent = "Public · port " + srv.port + " · up " + fmtUp(srv.uptime || 0); pill.className = "pill on"; }
     else if (running) { pill.textContent = "Running on port " + srv.port + " · host only"; pill.className = "pill on"; }
+    else if (srv.stale) { pill.textContent = "Not answering on port " + srv.port + " · press Stop, then Start"; pill.className = "pill busy"; }
     else { pill.textContent = srv.portFree === false ? "Stopped · port " + srv.port + " busy" : "Stopped"; pill.className = "pill"; }
-    $("btn-start").classList.toggle("hidden", running); $("btn-stop").classList.toggle("hidden", !running);
+    $("btn-start").classList.toggle("hidden", running || srv.stale);
+    $("btn-stop").classList.toggle("hidden", !(running || srv.stale || tun.running));
     $("btn-start").disabled = busy;
 
     // invite link
@@ -265,9 +267,11 @@
     const cf = !!(st.tools && st.tools.cloudflared);
     $("btn-tunnel").classList.toggle("hidden", tun.running); $("btn-tunnel-stop").classList.toggle("hidden", !tun.running);
     $("btn-tunnel").disabled = busy || !cf;
-    $("tunnel-note").textContent = cf
-      ? (tun.running ? "Public link is live. Anyone with a meeting link can join while it is up; stop it to go host-only again." : "Cloudflare quick tunnel: HTTPS, no account, new random URL each time. Media stays peer-to-peer; only signaling and chat pass through.")
-      : "cloudflared is not installed. In a terminal:  brew install cloudflared  — then come back here. Or set a Public URL in Settings.";
+    $("tunnel-note").textContent = !cf
+      ? "cloudflared is not installed. In a terminal:  brew install cloudflared  — then come back here. Or set a Public URL in Settings."
+      : tun.orphan ? "The public tunnel is still running but the server is not. Press Stop to close it, or Start to bring the server back."
+      : tun.running ? "Public link is live. Anyone with a meeting link can join while it is up; stop it to go host-only again."
+      : "Cloudflare quick tunnel: HTTPS, no account, new random URL each time. Media stays peer-to-peer; only signaling and chat pass through.";
     $("local-url").textContent = srv.localUrl || "";
     $("lan-line").classList.toggle("hidden", !srv.lanUrl); $("lan-url").textContent = srv.lanUrl || "";
 

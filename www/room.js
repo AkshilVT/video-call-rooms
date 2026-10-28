@@ -24,7 +24,8 @@
     h264: LS.get("h264", true), sounds: LS.get("sounds", true), audioOnly: false, stats: false,
   };
   const S = {
-    phase: "lobby", ws: null, wsTries: 0, reconnectTimer: 0, id: null, room: null, config: null,
+    phase: "lobby", ws: null, wsTries: 0, reconnectTimer: 0, id: null, token: null, room: null, config: null,
+    lastRx: 0, pendingSignals: new Map(), seenChat: new Set(), busy: {}, roomMissing: false,
     local: { mic: null, cam: null, screen: null },
     state: { mic: prefs.mic, cam: prefs.cam, screen: false, hand: false },
     peers: new Map(), pinned: null, presenters: [], unread: 0, joinedAt: 0, leaving: false,
@@ -92,6 +93,18 @@
     }
   }
   function stopTrack(t) { if (t) { try { t.stop(); } catch (e) { /* ignore */ } } }
+  function watchTrack(track, role) {            // unplugged device / revoked permission
+    track.addEventListener("ended", () => {
+      if (S.local[role] !== track || S.phase === "left") return;
+      S.local[role] = null;
+      if (role === "cam") S.state.cam = false; else S.state.mic = false;
+      for (const p of S.peers.values()) if (p.tx[role]) p.tx[role].sender.replaceTrack(null).catch(() => {});
+      toast(role === "cam" ? "Camera disconnected" : "Microphone disconnected", "warn");
+      if (S.analyser && role === "mic") S.analyser = null;
+      renderLobby(); renderSelf(); sendState(); layout();
+    });
+    return track;
+  }
   function permissionHint(e) {
     if (!e) return "";
     if (e.name === "NotAllowedError") return "Permission denied. Allow camera/microphone for this site in the address bar, then reload.";
@@ -141,15 +154,16 @@
       hint.textContent = "This browser can't access camera/microphone here. Open the link over HTTPS (or localhost)."; hint.className = "hint error";
       S.state.mic = false; S.state.cam = false; renderLobby(); return;
     }
-    try { S.local.mic = await getMic(prefs.micId); S.local.mic.enabled = wantMic; }
+    try { S.local.mic = watchTrack(await getMic(prefs.micId), "mic"); S.local.mic.enabled = wantMic; }
     catch (e) { err = e; S.state.mic = false; }
     if (wantCam) {
-      try { S.local.cam = await getCam(prefs.camId); }
+      try { S.local.cam = watchTrack(await getCam(prefs.camId), "cam"); }
       catch (e) { err = err || e; S.state.cam = false; }
     }
     if (err) { hint.textContent = permissionHint(err); hint.className = "hint error"; }
     await refreshDevices();
     renderLobby();
+    for (const p of S.peers.values()) attachLocal(p);   // in case a join raced the preview
   }
   function renderLobby() {
     const v = $("preview-video");
@@ -160,33 +174,48 @@
     $("lobby-cam").setAttribute("aria-pressed", String(S.state.cam));
   }
   async function toggleMic() {
-    if (!S.local.mic && !S.state.mic) {
-      try { S.local.mic = await getMic(prefs.micId); for (const p of S.peers.values()) if (p.tx.mic) p.tx.mic.sender.replaceTrack(S.local.mic); }
-      catch (e) { toast(permissionHint(e), "error"); return; }
-    }
-    S.state.mic = !S.state.mic;
-    if (S.local.mic) S.local.mic.enabled = S.state.mic;
-    LS.set("mic", S.state.mic);
-    renderLobby(); renderSelf(); sendState();
+    if (S.busy.mic || S.phase === "left") return;
+    S.busy.mic = true;
+    try {
+      if (!S.local.mic && !S.state.mic) {
+        let t;
+        try { t = await getMic(prefs.micId); } catch (e) { toast(permissionHint(e), "error"); return; }
+        if (S.phase === "left") { stopTrack(t); return; }
+        S.local.mic = watchTrack(t, "mic");
+        for (const p of S.peers.values()) if (p.tx.mic) p.tx.mic.sender.replaceTrack(t).catch(() => {});
+        if (S.analyser) { S.analyser = null; setupLocalAnalyser(); }
+      }
+      S.state.mic = !S.state.mic;
+      if (S.local.mic) S.local.mic.enabled = S.state.mic;
+      LS.set("mic", S.state.mic);
+      renderLobby(); renderSelf(); sendState();
+    } finally { S.busy.mic = false; }
   }
   async function toggleCam() {
-    if (S.state.cam) {
-      S.state.cam = false;
-      const t = S.local.cam; S.local.cam = null; stopTrack(t);
-      for (const p of S.peers.values()) if (p.tx.cam) p.tx.cam.sender.replaceTrack(null).catch(() => {});
-    } else {
-      try { S.local.cam = await getCam(prefs.camId); } catch (e) { toast(permissionHint(e), "error"); return; }
-      S.state.cam = true;
-      for (const p of S.peers.values()) if (p.tx.cam) p.tx.cam.sender.replaceTrack(S.local.cam).catch(() => {});
-      refreshDevices();
-    }
-    LS.set("cam", S.state.cam);
-    renderLobby(); renderSelf(); sendState(); layout();
+    if (S.busy.cam || S.phase === "left") return;
+    S.busy.cam = true;
+    try {
+      if (S.state.cam) {
+        S.state.cam = false;
+        const t = S.local.cam; S.local.cam = null; stopTrack(t);
+        for (const p of S.peers.values()) if (p.tx.cam) p.tx.cam.sender.replaceTrack(null).catch(() => {});
+      } else {
+        let t;
+        try { t = await getCam(prefs.camId); } catch (e) { toast(permissionHint(e), "error"); return; }
+        if (S.phase === "left") { stopTrack(t); return; }
+        S.local.cam = watchTrack(t, "cam");
+        S.state.cam = true;
+        for (const p of S.peers.values()) if (p.tx.cam) p.tx.cam.sender.replaceTrack(t).catch(() => {});
+        refreshDevices();
+      }
+      LS.set("cam", S.state.cam);
+      renderLobby(); renderSelf(); sendState(); layout();
+    } finally { S.busy.cam = false; }
   }
 
   // ------------------------------------------------------------- websocket
   function wsUrl() { return (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws"; }
-  function send(obj) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(obj)); }
+  function send(obj) { if (S.ws && S.ws.readyState === 1) { S.ws.send(JSON.stringify(obj)); return true; } return false; }
   function sendState() { send({ type: "state", state: S.state }); }
 
   function connect() {
@@ -195,11 +224,17 @@
     try { ws = new WebSocket(wsUrl()); } catch (e) { onDisconnected(); return; }
     S.ws = ws;
     ws.onopen = () => {
+      S.lastRx = Date.now();
       const name = $("name").value.trim() || prefs.name || "Guest";
-      ws.send(JSON.stringify({ type: "join", room: code, name, state: S.state, id: S.id || undefined }));
+      ws.send(JSON.stringify({ type: "join", room: code, name, state: S.state, id: S.id || undefined, token: S.token || undefined }));
     };
-    ws.onmessage = (e) => { let m; try { m = JSON.parse(e.data); } catch (err) { return; } onMessage(m); };
-    ws.onclose = () => { if (S.ws === ws) { S.ws = null; onDisconnected(); } };
+    ws.onmessage = (e) => { S.lastRx = Date.now(); let m; try { m = JSON.parse(e.data); } catch (err) { return; } onMessage(m); };
+    ws.onclose = (e) => {
+      if (S.ws !== ws) return;
+      S.ws = null;
+      if (e.code === 4000) { leave("You joined this meeting from another tab or device.", "Disconnected"); return; }
+      onDisconnected();
+    };
     ws.onerror = () => { /* onclose follows */ };
   }
   function onDisconnected() {
@@ -209,11 +244,20 @@
     S.wsTries++;
     if (S.wsTries === 1) toast("Connection lost. Reconnecting…", "warn", 4000);
     if (S.wsTries > 12) { leave("Lost the connection to the meeting server.", "Connection lost"); return; }
-    const delay = Math.min(10000, 800 * Math.pow(1.7, S.wsTries - 1));
+    const delay = Math.min(10000, 800 * Math.pow(1.7, S.wsTries - 1)) * (0.7 + Math.random() * 0.6);   // jitter: no reconnect stampede
     S.reconnectTimer = setTimeout(connect, delay);
   }
   let pingTimer = 0;
-  function startPing() { stopPing(); pingTimer = setInterval(() => send({ type: "ping", t: Date.now() }), 20000); }
+  function startPing() {
+    stopPing();
+    pingTimer = setInterval(() => {
+      if (S.ws && S.ws.readyState === 1 && Date.now() - S.lastRx > 50000) {   // half-open socket (sleep/wake, NAT drop)
+        try { S.ws.close(); } catch (e) { /* onclose reconnects */ }
+        return;
+      }
+      send({ type: "ping", t: Date.now() });
+    }, 20000);
+  }
   function stopPing() { clearInterval(pingTimer); pingTimer = 0; }
 
   function lobbyError(text) {
@@ -232,8 +276,7 @@
       }
       case "closed": return leave(m.reason === "server stopped" ? "The host stopped the server." : "The host ended the meeting.", "Meeting ended");
       case "peer-joined": {
-        if (S.peers.has(m.peer.id)) removePeer(m.peer.id, true);
-        addPeer(m.peer, false);
+        addPeer(m.peer);
         sysMessage(m.peer.name + " joined");
         if (S.peers.size <= 6) sounds.join();
         return;
@@ -243,7 +286,14 @@
         if (p) { removePeer(m.id); if (m.reason !== "reconnect") { sysMessage(p.name + " left"); if (S.peers.size < 6) sounds.leave(); } }
         return;
       }
-      case "signal": { const p = S.peers.get(m.from); if (p) p.queue = p.queue.then(() => onSignal(p, m.data)).catch((e) => console.warn("signal", e)); return; }
+      case "signal": {
+        const p = S.peers.get(m.from);
+        if (p) { p.queue = p.queue.then(() => onSignal(p, m.data)).catch((e) => console.warn("signal", e)); return; }
+        const q = S.pendingSignals.get(m.from) || [];            // offer arrived before peer-joined: hold it
+        if (q.length < 40) q.push({ data: m.data, at: Date.now() });
+        S.pendingSignals.set(m.from, q);
+        return;
+      }
       case "state": { const p = S.peers.get(m.id); if (p) { const was = p.state; p.state = m.state; onPeerState(p, was); } return; }
       case "want": { const p = S.peers.get(m.from); if (p) { p.wantCam = m.cam !== false; p.wantScreen = m.screen !== false; applyParams(p); } return; }
       case "chat": return addChat(m, true);
@@ -255,16 +305,16 @@
 
   function onWelcome(m) {
     const reconnecting = S.phase === "call";
-    S.id = m.id; S.room = m.room; S.config = m.config; S.wsTries = 0;
+    S.id = m.id; S.token = m.token || S.token; S.room = m.room; S.config = m.config; S.wsTries = 0;
     startPing();
     if (reconnecting) {
       for (const id of [...S.peers.keys()]) removePeer(id, true);
       toast("Reconnected", "", 2000);
     } else {
       enterCall();
-      m.chat.forEach((c) => addChat(c, false));
     }
-    m.peers.forEach((p) => addPeer(p, true));
+    (m.chat || []).forEach((c) => addChat(c, false));          // deduped: safe after a reconnect too
+    m.peers.forEach((p) => addPeer(p));
     renderPeople(); layout();
   }
 
@@ -309,16 +359,22 @@
   }
 
   // ------------------------------------------------------------- peers
-  function addPeer(info, initiator) {
+  function addPeer(info) {
+    if (S.peers.has(info.id)) removePeer(info.id, true);
     const peer = {
       id: info.id, name: info.name, state: info.state || { mic: false, cam: false, screen: false, hand: false },
       pc: null, polite: false, makingOffer: false, ignoreOffer: false, queue: Promise.resolve(), pending: [],
-      tx: {}, tracks: {}, el: {}, speaking: false, wantCam: true, wantScreen: true,
-      stats: { lastBytes: 0, lastTs: 0, kbps: 0, rtt: 0, loss: 0, w: 0, h: 0, fps: 0 }, iceTimer: 0,
+      tx: {}, tracks: {}, el: {}, speaking: false, wantCam: true, wantScreen: true, attempts: info.attempts || 0,
+      stats: { lastBytes: 0, lastTs: 0, kbps: 0, rtt: 0, loss: 0, w: 0, h: 0, fps: 0 }, iceTimer: 0, watchdog: 0,
     };
     S.peers.set(peer.id, peer);
     makeTile(peer);
-    createPC(peer, initiator);
+    createPC(peer);
+    const held = S.pendingSignals.get(peer.id);
+    if (held) {
+      S.pendingSignals.delete(peer.id);
+      held.filter((h) => Date.now() - h.at < 15000).forEach((h) => { peer.queue = peer.queue.then(() => onSignal(peer, h.data)).catch(() => {}); });
+    }
     if (peer.state.screen) notePresenter(peer.id, true);
     if (prefs.audioOnly || document.hidden) send({ type: "want", to: peer.id, cam: !prefs.audioOnly && !document.hidden, screen: !document.hidden });
     renderPeople(); updateBadges(); layout();
@@ -328,8 +384,8 @@
     const peer = S.peers.get(id);
     if (!peer) return;
     S.peers.delete(id);
-    clearTimeout(peer.iceTimer);
-    try { peer.pc.close(); } catch (e) { /* ignore */ }
+    clearTimeout(peer.iceTimer); clearTimeout(peer.watchdog);
+    try { if (peer.pc) peer.pc.close(); } catch (e) { /* ignore */ }
     if (peer.el.audio) { peer.el.audio.srcObject = null; peer.el.audio.remove(); }
     if (peer.el.tile) peer.el.tile.remove();
     notePresenter(id, false);
@@ -338,10 +394,20 @@
     for (const p of S.peers.values()) applyParams(p);
   }
 
-  function createPC(peer, initiator) {
-    const pc = new RTCPeerConnection({ iceServers: (S.config && S.config.iceServers) || [], bundlePolicy: "max-bundle", rtcpMuxPolicy: "require" });
+  function createPC(peer) {
+    let pc;
+    try {
+      pc = new RTCPeerConnection({ iceServers: (S.config && S.config.iceServers) || [], bundlePolicy: "max-bundle", rtcpMuxPolicy: "require" });
+    } catch (e) {
+      peer.pc = null;
+      if (!S.pcErrorShown) { S.pcErrorShown = true; toast("Could not set up a connection (check the host's TURN settings): " + (e.message || e.name), "error", 9000); }
+      renderTile(peer);
+      return;
+    }
     peer.pc = pc;
     peer.polite = S.id < peer.id;
+    const initiator = !peer.polite;            // deterministic: the higher id always offers
+    peer.watchdog = setTimeout(() => checkStuck(peer, 1), 12000);
     pc.onicecandidate = (e) => { if (e.candidate) send({ type: "signal", to: peer.id, data: { candidate: e.candidate.toJSON ? e.candidate.toJSON() : e.candidate } }); };
     pc.onnegotiationneeded = async () => {
       try { peer.makingOffer = true; await pc.setLocalDescription(); send({ type: "signal", to: peer.id, data: { description: pc.localDescription } }); }
@@ -357,7 +423,7 @@
     };
     pc.onconnectionstatechange = () => {
       const st = pc.connectionState;
-      if (st === "connected") { clearTimeout(peer.iceTimer); applyParams(peer); }
+      if (st === "connected") { clearTimeout(peer.iceTimer); clearTimeout(peer.watchdog); peer.attempts = 0; applyParams(peer); }
       if (st === "failed") restartIce(peer);
       renderTile(peer);
     };
@@ -374,6 +440,29 @@
       preferCodecs(peer.tx.cam); preferCodecs(peer.tx.screen);
       attachLocal(peer);
     }
+  }
+  function checkStuck(peer, stage) {
+    // Nothing negotiated after 12 s (lost offer, both sides waiting): the offerer nudges,
+    // then after 15 more seconds both sides start the connection over, up to 3 times.
+    if (S.peers.get(peer.id) !== peer || !peer.pc) return;
+    const st = peer.pc.connectionState;
+    if (st === "connected" || st === "closed") return;
+    const initiator = !peer.polite;
+    if (stage === 1) {
+      if (initiator) {
+        if (peer.pc.signalingState === "have-local-offer" && peer.pc.localDescription) send({ type: "signal", to: peer.id, data: { description: peer.pc.localDescription } });
+        else restartIce(peer);
+      }
+      peer.watchdog = setTimeout(() => checkStuck(peer, 2), 15000);
+      return;
+    }
+    if (!initiator) return;
+    if (peer.attempts >= 3) {
+      if (!peer.gaveUp) { peer.gaveUp = true; toast("Can't connect to " + peer.name + ". A TURN relay may be needed on this network.", "error", 8000); renderTile(peer); }
+      return;
+    }
+    send({ type: "signal", to: peer.id, data: { reset: true } });
+    addPeer({ id: peer.id, name: peer.name, state: peer.state, attempts: peer.attempts + 1 });
   }
   function restartIce(peer) {
     if (!peer.pc || peer.pc.signalingState === "closed") return;
@@ -421,6 +510,10 @@
   }
 
   async function onSignal(peer, data) {
+    if (data.reset) {                                           // the offerer is starting over
+      addPeer({ id: peer.id, name: peer.name, state: peer.state, attempts: peer.attempts + 1 });
+      return;
+    }
     const pc = peer.pc;
     if (!pc || pc.signalingState === "closed") return;
     if (data.description) {
@@ -518,9 +611,10 @@
     peer.el.avatar.textContent = initials(peer.name);
     if (!isSelf && peer.pc) {
       const st = peer.pc.connectionState;
-      if (st !== "connected" && st !== "connecting" && st !== "new") peer.el.name.textContent += " · " + st;
+      if (peer.gaveUp) peer.el.name.textContent += " · can't connect";
+      else if (st !== "connected" && st !== "connecting" && st !== "new") peer.el.name.textContent += " · " + st;
       else if (st !== "connected") peer.el.name.textContent += " · connecting";
-    }
+    } else if (!isSelf && !peer.pc) peer.el.name.textContent += " · no connection";
   }
   function stageTarget() {
     if (S.pinned && (S.pinned === "self" || S.peers.has(S.pinned))) return { id: S.pinned, kind: "pin" };
@@ -586,16 +680,19 @@
 
   // ------------------------------------------------------------- screen share
   async function startShare() {
-    if (!hasDisplay) return;
+    if (!hasDisplay || S.busy.share || S.phase === "left") return;
+    S.busy.share = true;
     let stream;
     try {
       stream = await navigator.mediaDevices.getDisplayMedia({
         video: { frameRate: { ideal: shareFps(), max: shareFps() }, width: { max: 1920 }, height: { max: 1080 } },
         audio: false, selfBrowserSurface: "exclude", surfaceSwitching: "include",
       });
-    } catch (e) { if (e.name !== "NotAllowedError") toast("Could not share screen: " + (e.message || e.name), "error"); return; }
+    } catch (e) { S.busy.share = false; if (e.name !== "NotAllowedError") toast("Could not share screen: " + (e.message || e.name), "error"); return; }
+    S.busy.share = false;
     const track = stream.getVideoTracks()[0];
     if (!track) return;
+    if (S.phase === "left" || S.state.screen) { stopTrack(track); return; }   // left, or a second picker finished first
     try { track.contentHint = "detail"; } catch (e) { /* ignore */ }
     stopTrack(S.local.screen);
     S.local.screen = track; S.state.screen = true;
@@ -684,6 +781,10 @@
 
   // ------------------------------------------------------------- chat & people
   function addChat(m, live) {
+    const dk = m.id + "|" + m.ts + "|" + m.text;
+    if (S.seenChat.has(dk)) return;
+    S.seenChat.add(dk);
+    if (S.seenChat.size > 400) S.seenChat = new Set([...S.seenChat].slice(-200));
     const list = $("chat-list"); $("chat-empty").classList.add("hidden");
     const mine = m.id === S.id;
     const key = m.id + ":" + m.name;
@@ -758,7 +859,9 @@
   async function switchMic(id) {
     prefs.micId = id; LS.set("micId", id);
     try {
-      const t = await getMic(id); t.enabled = S.state.mic;
+      const t = await getMic(id);
+      if (S.phase === "left") { stopTrack(t); return; }
+      t.enabled = S.state.mic; watchTrack(t, "mic");
       const old = S.local.mic; S.local.mic = t; stopTrack(old);
       for (const p of S.peers.values()) if (p.tx.mic) p.tx.mic.sender.replaceTrack(t).catch(() => {});
       if (S.analyser) { S.analyser = null; setupLocalAnalyser(); }
@@ -768,7 +871,10 @@
     prefs.camId = id; LS.set("camId", id);
     if (!S.state.cam) return;
     try {
-      const t = await getCam(id); const old = S.local.cam; S.local.cam = t; stopTrack(old);
+      const t = await getCam(id);
+      if (S.phase === "left" || !S.state.cam) { stopTrack(t); return; }    // toggled off while the picker was open
+      watchTrack(t, "cam");
+      const old = S.local.cam; S.local.cam = t; stopTrack(old);
       for (const p of S.peers.values()) if (p.tx.cam) p.tx.cam.sender.replaceTrack(t).catch(() => {});
       renderLobby(); renderSelf(); layout();
     } catch (e) { toast(permissionHint(e), "error"); }
@@ -821,7 +927,9 @@
     document.querySelectorAll(".panel-tabs [data-tab]").forEach((b) => b.addEventListener("click", () => openPanel(b.dataset.tab)));
     $("chat-form").addEventListener("submit", (e) => {
       e.preventDefault(); const inp = $("chat-input"); const text = inp.value.trim();
-      if (!text) return; send({ type: "chat", text }); inp.value = "";
+      if (!text) return;
+      if (!send({ type: "chat", text })) { toast("Not connected right now. Try again in a moment.", "warn"); return; }
+      inp.value = "";
     });
     $("copy-link").addEventListener("click", async () => { toast((await copyText(inviteUrl())) ? "Meeting link copied" : inviteUrl()); });
     $("rejoin").addEventListener("click", () => location.reload());
@@ -835,6 +943,7 @@
     $("set-sounds").addEventListener("change", (e) => { prefs.sounds = e.target.checked; LS.set("sounds", prefs.sounds); });
     $("set-stats").addEventListener("change", (e) => { prefs.stats = e.target.checked; $("call").classList.toggle("show-stats", prefs.stats); if (!prefs.stats) for (const p of S.peers.values()) p.el.quality.textContent = ""; });
     document.addEventListener("keydown", (e) => {
+      if (S.phase === "left") return;
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
         const k = e.key.toLowerCase();
         if (k === "d") { e.preventDefault(); toggleMic(); }
@@ -842,7 +951,10 @@
       } else if (e.key === "Escape" && S.phase === "call" && S.panelOpen && !$("settings").open) closePanel();
     });
     document.addEventListener("visibilitychange", () => { if (S.phase === "call") sendWants(); });
-    document.addEventListener("click", () => { if (S.audioCtx && S.audioCtx.state === "suspended") ensureAudioCtx(); }, true);
+    document.addEventListener("click", () => {
+      if (S.audioCtx && S.audioCtx.state === "suspended") ensureAudioCtx();
+      for (const p of S.peers.values()) if (p.el.audio && p.el.audio.paused && p.el.audio.srcObject) p.el.audio.play().catch(() => {});   // Safari: autoplay refused until a gesture
+    }, true);
     window.addEventListener("pagehide", () => { if (S.phase === "call") { send({ type: "leave" }); } });
     window.addEventListener("resize", layout);
     if (window.ResizeObserver) new ResizeObserver(() => layout()).observe($("media"));
@@ -857,7 +969,7 @@
       document.title = code + " · " + (cfg.serverName || "Rooms");
       if (!info.exists && !info.canCreate) {
         meta.textContent = "No meeting with this code."; $("lobby-title").textContent = "Meeting not found";
-        $("join").disabled = true; return;
+        S.roomMissing = true; $("join").disabled = true; $("join").textContent = "Join now"; return;
       }
       const label = info.label ? info.label + " · " : "";
       meta.textContent = label + code + " · " + (info.count ? (info.count === 1 ? "1 person is here" : info.count + " people are here") : "No one else is here yet");
@@ -868,7 +980,11 @@
     if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(code)) { $("lobby-meta").textContent = "That meeting code is not valid."; $("join").disabled = true; return; }
     wire();
     lobbyMeta();
-    startPreview();
+    $("join").disabled = true; $("join").textContent = "Preparing…";
+    let readied = false;
+    const ready = () => { if (readied || S.roomMissing || S.phase !== "lobby") return; readied = true; $("join").disabled = false; $("join").textContent = "Join now"; };
+    startPreview().then(ready, ready);
+    setTimeout(ready, 8000);                 // a hung permission prompt must not block joining audio-less
   }
   window.__roomsDebug = S;
   init();

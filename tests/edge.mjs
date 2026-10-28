@@ -76,6 +76,28 @@ try {
   check(/full/i.test(hint), "third person sees 'meeting is full' and it is not overwritten: " + JSON.stringify(hint));
   check(!(await g3.locator("#join").isDisabled()) && (await g3.locator("#join").textContent()) === "Join now", "Join button re-enabled after error");
   s2.kill();
+
+  // ---- 3. lost-offer recovery: signals blackholed for a while ------------------
+  const s3 = await startServer(18783); const B3 = "http://127.0.0.1:18783";
+  async function blackholed(ms, room) {
+    const mk = async (name) => {
+      const p = await open(B3, room, name);
+      await p.evaluate((ms) => { const orig = WebSocket.prototype.send; const until = Date.now() + ms;
+        WebSocket.prototype.send = function (d) { if (Date.now() < until && typeof d === "string" && d.includes('"type":"signal"')) return; return orig.call(this, d); }; }, ms);
+      await p.click("#join"); await p.waitForSelector("#call:not(.hidden)"); return p;
+    };
+    const t0 = Date.now(); const x = await mk("X"); const y = await mk("Y");
+    await waitFor(async () => (await allConnected(x, 1)) && (await allConnected(y, 1)), "recovery after " + ms + "ms blackhole", 60000);
+    const secs = Math.round((Date.now() - t0) / 1000);
+    const attempts = await x.evaluate(() => [...window.__roomsDebug.peers.values()][0].attempts);
+    await x.context().close(); await y.context().close();
+    return { secs, attempts };
+  }
+  const r1 = await blackholed(8000, "bh-short");
+  check(r1.secs >= 10 && r1.secs <= 25, "offer lost for 8 s → watchdog re-sends offer, connected in " + r1.secs + " s");
+  const r2 = await blackholed(14000, "bh-long");
+  check(r2.secs >= 20 && r2.secs <= 45, "offer lost for 14 s → reset + fresh negotiation, connected in " + r2.secs + " s");
+  s3.kill();
 } catch (e) { failures.push("exception: " + e.message); console.log("EXCEPTION", e); }
 finally { await browser.close(); }
 console.log(failures.length ? "FAILED\n - " + failures.join("\n - ") : "ALL PASSED");

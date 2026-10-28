@@ -22,6 +22,7 @@ import logging
 import logging.handlers
 import mimetypes
 import os
+import queue
 import re
 import secrets
 import signal
@@ -29,25 +30,30 @@ import socket
 import ssl
 import struct
 import sys
+import tempfile
 import threading
 import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 ROOT = os.path.dirname(os.path.abspath(__file__))
-MAX_FRAME = 256 * 1024          # one WebSocket frame
-MAX_MESSAGE = 256 * 1024        # reassembled message
+MAX_FRAME = 96 * 1024           # one WebSocket frame
+MAX_MESSAGE = 96 * 1024         # reassembled message (an SDP is ~10-30 KB)
+MAX_FRAGMENTS = 64              # fragments per message
 MAX_BODY = 64 * 1024            # JSON API bodies
 MAX_NAME = 40
 MAX_CHAT = 2000
 CHAT_HISTORY = 100
+SEND_QUEUE = 512                # frames buffered per connection before it is dropped
+JOIN_TIMEOUT = 15               # seconds a fresh socket gets to send its join
 WS_IDLE_TIMEOUT = 75            # client pings every 20 s; silence this long = dead
 ROOM_PRUNE_AFTER = 60 * 60      # unsaved empty rooms vanish after an hour
 CODE_ALPHABET = "bcdfghjkmnpqrstvwxz"   # no vowels: no accidental words
 CODE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
+ID_RE = re.compile(r"^[A-Za-z0-9_-]{4,16}$")
 LOCAL_ORIGIN_RE = re.compile(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$")
 
 log = logging.getLogger("rooms")
@@ -71,12 +77,21 @@ DEFAULT_SETTINGS = {
 # settings / persistence helpers
 # ----------------------------------------------------------------------------
 
-def atomic_write(path, text):
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = "%s.%d.tmp" % (path, os.getpid())
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(text)
-    os.replace(tmp, path)
+def atomic_write(path, text, mode=0o644):
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=d)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def read_json(path, default):
@@ -95,7 +110,7 @@ def load_settings(data_dir):
             for k, v in on_disk.items():
                 if k in merged and v is not None:
                     merged[k] = v
-    # sanitise the bits the client sees
+    # sanitise everything the client or ice_servers() will touch
     try:
         merged["maxPeers"] = max(2, min(16, int(merged["maxPeers"])))
     except (TypeError, ValueError):
@@ -108,6 +123,12 @@ def load_settings(data_dir):
         merged["camera"] = "medium"
     merged["allowCreate"] = bool(merged["allowCreate"])
     merged["serverName"] = str(merged.get("serverName") or "Rooms")[:60]
+    stun = merged.get("stun")
+    if isinstance(stun, str):
+        stun = re.split(r"[,\s]+", stun)
+    merged["stun"] = [s for s in (stun if isinstance(stun, list) else []) if isinstance(s, str)]
+    turn = merged.get("turn")
+    merged["turn"] = turn if isinstance(turn, dict) else dict(DEFAULT_SETTINGS["turn"])
     return merged
 
 
@@ -116,18 +137,19 @@ def ice_servers(settings):
     stun = [s for s in (settings.get("stun") or []) if isinstance(s, str) and s.startswith("stun:")]
     if stun:
         out.append({"urls": stun})
-    turn = settings.get("turn") or {}
+    turn = settings.get("turn")
+    if not isinstance(turn, dict):
+        turn = {}
     urls = turn.get("urls") or ""
     if isinstance(urls, str):
         urls = [u.strip() for u in re.split(r"[,\s]+", urls) if u.strip()]
+    if not isinstance(urls, list):
+        urls = []
     urls = [u for u in urls if isinstance(u, str) and u.startswith(("turn:", "turns:"))]
-    if urls:
-        entry = {"urls": urls}
-        if turn.get("username"):
-            entry["username"] = str(turn["username"])
-        if turn.get("credential"):
-            entry["credential"] = str(turn["credential"])
-        out.append(entry)
+    user, cred = turn.get("username"), turn.get("credential")
+    # a TURN entry without credentials makes `new RTCPeerConnection` throw in every browser
+    if urls and user and cred:
+        out.append({"urls": urls, "username": str(user), "credential": str(cred)})
     return out
 
 
@@ -145,6 +167,13 @@ def clean_name(raw):
 def clean_state(raw):
     raw = raw if isinstance(raw, dict) else {}
     return {k: bool(raw.get(k, False)) for k in ("mic", "cam", "screen", "hand")}
+
+
+def same_secret(a, b):
+    try:
+        return hmac.compare_digest(str(a or "").encode("utf-8", "replace"), str(b or "").encode("utf-8", "replace"))
+    except (TypeError, ValueError):
+        return False
 
 
 # ----------------------------------------------------------------------------
@@ -166,15 +195,77 @@ def ws_unmask(payload, mask):
 
 
 class WSConn:
+    """One WebSocket. Reads happen on the handler thread; writes go through a
+    bounded queue drained by a writer thread, so one stalled peer can never
+    block a broadcast to the others."""
+
     def __init__(self, sock, rfile, wfile, addr):
         self.sock = sock
         self.rfile = rfile
         self.wfile = wfile
         self.addr = addr
-        self.lock = threading.Lock()
         self.closed = False
         self.last_rx = time.time()
+        self.q = queue.Queue(maxsize=SEND_QUEUE)
+        self.writer = threading.Thread(target=self._writer, name="ws-writer", daemon=True)
+        self.writer.start()
 
+    # -- writing -----------------------------------------------------------
+    def _writer(self):
+        while True:
+            item = self.q.get()
+            if item is None:
+                return
+            try:
+                self.wfile.write(item)
+                self.wfile.flush()
+            except (OSError, ValueError):
+                self.closed = True
+                self._shutdown()
+                return
+
+    def send_frame(self, opcode, payload=b""):
+        if self.closed:
+            return False
+        n = len(payload)
+        if n < 126:
+            header = bytes((0x80 | opcode, n))
+        elif n < 65536:
+            header = bytes((0x80 | opcode, 126)) + struct.pack("!H", n)
+        else:
+            header = bytes((0x80 | opcode, 127)) + struct.pack("!Q", n)
+        try:
+            self.q.put_nowait(header + payload)
+            return True
+        except queue.Full:
+            log.info("ws %s: send queue full, dropping connection", self.addr[0])
+            self.closed = True
+            self._shutdown()
+            return False
+
+    def send_json(self, obj):
+        return self.send_frame(0x1, json.dumps(obj, separators=(",", ":")).encode("utf-8"))
+
+    def _shutdown(self):
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)   # unblocks a reader in another thread
+        except OSError:
+            pass
+
+    def close(self, code=1000, reason=""):
+        if self.closed:
+            return
+        self.send_frame(0x8, struct.pack("!H", code) + reason.encode("utf-8")[:120])
+        self.closed = True
+        try:
+            self.q.put_nowait(None)
+        except queue.Full:
+            pass
+        if threading.current_thread() is not self.writer:
+            self.writer.join(1.0)            # let the close frame leave the building
+        self._shutdown()
+
+    # -- reading -----------------------------------------------------------
     def _read_exact(self, n):
         buf = self.rfile.read(n)
         if buf is None or len(buf) < n:
@@ -185,6 +276,7 @@ class WSConn:
         """Block for one complete data message; answers pings in between."""
         fragments = []
         op = None
+        total = 0
         while True:
             h = self._read_exact(2)
             b1, b2 = h[0], h[1]
@@ -223,45 +315,12 @@ class WSConn:
                     raise WSError("interleaved data frames")
                 op = opcode
             fragments.append(payload)
-            if sum(len(f) for f in fragments) > MAX_MESSAGE:
+            total += length
+            if total > MAX_MESSAGE or len(fragments) > MAX_FRAGMENTS:
                 self.close(1009, "message too large")
                 raise WSError("message too large")
             if fin:
                 return op, b"".join(fragments)
-
-    def send_frame(self, opcode, payload=b""):
-        n = len(payload)
-        if n < 126:
-            header = bytes((0x80 | opcode, n))
-        elif n < 65536:
-            header = bytes((0x80 | opcode, 126)) + struct.pack("!H", n)
-        else:
-            header = bytes((0x80 | opcode, 127)) + struct.pack("!Q", n)
-        with self.lock:
-            if self.closed:
-                return False
-            try:
-                self.wfile.write(header + payload)
-                self.wfile.flush()
-                return True
-            except (OSError, ValueError):
-                self.closed = True
-                return False
-
-    def send_json(self, obj):
-        return self.send_frame(0x1, json.dumps(obj, separators=(",", ":")).encode("utf-8"))
-
-    def close(self, code=1000, reason=""):
-        if self.closed:
-            return
-        try:
-            self.send_frame(0x8, struct.pack("!H", code) + reason.encode("utf-8")[:120])
-        finally:
-            self.closed = True
-            try:
-                self.sock.shutdown(socket.SHUT_RDWR)   # unblocks a reader in another thread
-            except OSError:
-                pass
 
 
 # ----------------------------------------------------------------------------
@@ -272,16 +331,21 @@ class RoomFull(Exception):
     pass
 
 
-class Peer:
-    __slots__ = ("id", "name", "state", "conn", "joined", "chat_times")
+class RoomClosed(Exception):
+    pass
 
-    def __init__(self, pid, name, state, conn):
+
+class Peer:
+    __slots__ = ("id", "name", "state", "conn", "joined", "chat_times", "token")
+
+    def __init__(self, pid, name, state, conn, token):
         self.id = pid
         self.name = name
         self.state = state
         self.conn = conn
         self.joined = time.time()
         self.chat_times = deque(maxlen=10)
+        self.token = token        # resume secret: proves a reconnect owns this id
 
     def public(self):
         return {"id": self.id, "name": self.name, "state": self.state, "joined": int(self.joined * 1000)}
@@ -296,6 +360,7 @@ class Room:
         self.peers = {}
         self.chat = deque(maxlen=CHAT_HISTORY)
         self.lock = threading.RLock()
+        self.join_lock = threading.Lock()   # serialises join -> welcome -> peer-joined
         self.empty_since = time.time()
         self.closed = False
 
@@ -306,21 +371,23 @@ class Room:
         with self.lock:
             return dict(self.public(), peers=[p.public() for p in self.peers.values()], chat=len(self.chat))
 
-    def join(self, conn, name, state, want_id, max_peers):
+    def join(self, conn, name, state, want_id, want_token, max_peers):
         replaced = None
         with self.lock:
             if self.closed:
-                raise RoomFull()
-            if want_id and want_id in self.peers:
+                raise RoomClosed()
+            existing = self.peers.get(want_id) if want_id else None
+            if existing is not None and same_secret(existing.token, want_token):
                 replaced = self.peers.pop(want_id)
-                pid = want_id
+                pid, token = want_id, replaced.token
             else:
                 if len(self.peers) >= max_peers:
                     raise RoomFull()
                 pid = None
                 while not pid or pid in self.peers:
                     pid = secrets.token_urlsafe(6)
-            peer = Peer(pid, name, state, conn)
+                token = secrets.token_urlsafe(16)
+            peer = Peer(pid, name, state, conn, token)
             self.peers[pid] = peer
             self.empty_since = None
         if replaced is not None:
@@ -373,6 +440,7 @@ class Rooms:
     def __init__(self, data_dir):
         self.data_dir = data_dir
         self.lock = threading.RLock()
+        self.persist_lock = threading.Lock()
         self.rooms = {}
         self.path = os.path.join(data_dir, "rooms.json") if data_dir else None
         if self.path:
@@ -387,12 +455,13 @@ class Rooms:
     def persist(self):
         if not self.path:
             return
-        with self.lock:
-            saved = [{"code": r.code, "label": r.label, "created": r.created} for r in self.rooms.values() if r.saved]
-        try:
-            atomic_write(self.path, json.dumps(saved, indent=1))
-        except OSError as e:
-            log.warning("could not persist rooms: %s", e)
+        with self.persist_lock:
+            with self.lock:
+                saved = [{"code": r.code, "label": r.label, "created": r.created} for r in self.rooms.values() if r.saved]
+            try:
+                atomic_write(self.path, json.dumps(saved, indent=1))
+            except OSError as e:
+                log.warning("could not persist rooms: %s", e)
 
     def get(self, code):
         with self.lock:
@@ -457,6 +526,7 @@ class Rooms:
                     if idle and room.chat:
                         room.chat.clear()
                     if idle and not room.saved and not room.peers:
+                        room.closed = True        # a session holding this Room retries get_or_create
                         del self.rooms[code]
 
 
@@ -502,7 +572,7 @@ class State:
         if handler.headers.get("CF-Connecting-IP"):      # never through the tunnel
             return False
         given = handler.headers.get("X-Admin-Token") or (query.get("token") or [""])[0]
-        return bool(given) and hmac.compare_digest(given, self.token)
+        return bool(given) and same_secret(given, self.token)
 
 
 STATE = None  # type: State
@@ -521,6 +591,10 @@ EXTRA_TYPES = {".js": "text/javascript", ".mjs": "text/javascript", ".svg": "ima
                ".webmanifest": "application/manifest+json", ".ico": "image/x-icon"}
 
 
+class QuietAbort(Exception):
+    """Raised to drop a connection without a traceback (bad TLS handshake etc.)."""
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "Rooms/" + VERSION
@@ -531,7 +605,10 @@ class Handler(BaseHTTPRequestHandler):
     def setup(self):
         super().setup()
         if isinstance(self.connection, ssl.SSLSocket):
-            self.connection.do_handshake()
+            try:
+                self.connection.do_handshake()
+            except (ssl.SSLError, OSError, socket.timeout) as e:
+                raise QuietAbort("tls handshake failed: %s" % e)
 
     def log_message(self, fmt, *args):
         log.debug("%s %s", self.address_string(), fmt % args)
@@ -570,6 +647,8 @@ class Handler(BaseHTTPRequestHandler):
         for k, v in (headers or {}).items():
             self.send_header(k, v)
         self._cors()
+        if self.close_connection:
+            self.send_header("Connection", "close")
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -578,10 +657,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_bytes(code, json.dumps(obj).encode("utf-8"), "application/json; charset=utf-8",
                         {"Cache-Control": "no-store"})
 
-    def fail(self, code, message):
+    def fail(self, code, message, close=False):
+        if close:
+            self.close_connection = True       # body may be unread: never reuse this socket
         self.send_json({"ok": False, "error": message}, code)
 
     def read_body(self):
+        if self.headers.get("Transfer-Encoding"):
+            raise ValueError("chunked bodies are not accepted")
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -620,11 +703,11 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         query = parse_qs(u.query)
         if not u.path.startswith("/api/"):
-            return self.fail(404, "not found")
+            return self.fail(404, "not found", close=True)
         try:
             body = self.read_body()
         except (ValueError, UnicodeDecodeError) as e:
-            return self.fail(400, "bad body: %s" % e)
+            return self.fail(400, "bad body: %s" % e, close=True)
         return self.api("POST", u.path, query, body)
 
     # -- static files --------------------------------------------------------
@@ -686,9 +769,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"ok": True, "exists": True, "label": room.label,
                                    "count": len(room.snapshot()), "maxPeers": st.settings["maxPeers"]})
         # ---- admin -------------------------------------------------------
+        is_admin_path = path == "/api/status" or path.startswith("/api/admin/")
         if not st.is_admin(self, query):
-            return self.fail(401 if path == "/api/status" or path.startswith("/api/admin/") else 404,
-                             "admin token required" if path == "/api/status" or path.startswith("/api/admin/") else "not found")
+            return self.fail(401 if is_admin_path else 404, "admin token required" if is_admin_path else "not found")
         if path == "/api/status":
             return self.send_json({
                 "ok": True, "version": VERSION, "pid": os.getpid(), "host": st.host, "port": st.port,
@@ -750,7 +833,6 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         conn = WSConn(self.connection, self.rfile, self.wfile, self.client_address)
         try:
-            self.connection.settimeout(WS_IDLE_TIMEOUT)
             ws_session(conn)
         except (WSClosed, ConnectionError, socket.timeout, OSError):
             pass
@@ -762,12 +844,22 @@ class Handler(BaseHTTPRequestHandler):
             conn.close()
 
 
+def handle_error_quietly(server, request, client_address):
+    """One log line per dropped connection instead of a traceback on stderr."""
+    exc = sys.exc_info()[1]
+    if isinstance(exc, (QuietAbort, ConnectionError, socket.timeout, ssl.SSLError, BrokenPipeError)):
+        log.info("%s: %s", client_address[0], exc)
+    else:
+        log.exception("request from %s failed", client_address[0])
+
+
 # ----------------------------------------------------------------------------
 # signaling session
 # ----------------------------------------------------------------------------
 
 def ws_session(conn):
     st = STATE
+    conn.sock.settimeout(JOIN_TIMEOUT)         # a socket that never joins is dropped quickly
     op, raw = conn.recv()
     try:
         msg = json.loads(raw.decode("utf-8")) if op == 0x1 else None
@@ -780,28 +872,44 @@ def ws_session(conn):
     if not CODE_RE.match(code):
         conn.send_json({"type": "error", "code": "bad-code", "message": "that meeting code is not valid"})
         return
-    room = st.rooms.get_or_create(code, st.settings["allowCreate"])
-    if room is None:
-        conn.send_json({"type": "error", "code": "no-room", "message": "no meeting with that code"})
-        return
     name = clean_name(msg.get("name"))
     state = clean_state(msg.get("state"))
     want_id = msg.get("id")
-    if not (isinstance(want_id, str) and re.match(r"^[A-Za-z0-9_-]{4,16}$", want_id)):
-        want_id = None
-    try:
-        peer = room.join(conn, name, state, want_id, st.settings["maxPeers"])
-    except RoomFull:
-        conn.send_json({"type": "error", "code": "room-full",
-                        "message": "this meeting is full (%d people)" % st.settings["maxPeers"]})
+    want_token = msg.get("token")
+    if not (isinstance(want_id, str) and ID_RE.match(want_id) and isinstance(want_token, str)):
+        want_id, want_token = None, None
+
+    room = peer = None
+    for _attempt in range(3):                  # a room can be pruned between get and join
+        room = st.rooms.get_or_create(code, st.settings["allowCreate"])
+        if room is None:
+            conn.send_json({"type": "error", "code": "no-room", "message": "no meeting with that code"})
+            return
+        try:
+            with room.join_lock:
+                peer = room.join(conn, name, state, want_id, want_token, st.settings["maxPeers"])
+                # welcome goes out before anyone hears peer-joined, so exactly one
+                # side of every pair sees the other in its welcome list.
+                conn.sock.settimeout(WS_IDLE_TIMEOUT)
+                conn.send_json({
+                    "type": "welcome", "id": peer.id, "token": peer.token, "room": room.public(),
+                    "peers": [p.public() for p in room.snapshot(exclude=peer)],
+                    "chat": room.history(), "config": st.public_config(),
+                })
+                room.broadcast({"type": "peer-joined", "peer": peer.public()}, exclude=peer)
+            break
+        except RoomFull:
+            conn.send_json({"type": "error", "code": "room-full",
+                            "message": "this meeting is full (%d people)" % st.settings["maxPeers"]})
+            return
+        except RoomClosed:
+            room = peer = None
+            continue
+    if peer is None:
+        conn.send_json({"type": "error", "code": "no-room", "message": "that meeting just closed, try again"})
         return
+
     log.info("join %s -> %s as %r (%d in room)", peer.id, code, name, len(room.snapshot()))
-    conn.send_json({
-        "type": "welcome", "id": peer.id, "room": room.public(),
-        "peers": [p.public() for p in room.snapshot(exclude=peer)],
-        "chat": room.history(), "config": st.public_config(),
-    })
-    room.broadcast({"type": "peer-joined", "peer": peer.public()}, exclude=peer)
     try:
         while True:
             op, raw = conn.recv()
@@ -914,6 +1022,9 @@ def main(argv=None):
         daemon_threads = True
         allow_reuse_address = True
         request_queue_size = 64
+
+        def handle_error(self, request, client_address):
+            handle_error_quietly(self, request, client_address)
 
     httpd = Server((args.host, args.port), Handler)
     if args.tls_cert:
