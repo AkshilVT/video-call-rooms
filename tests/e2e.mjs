@@ -6,6 +6,7 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -31,9 +32,11 @@ async function waitFor(fn, msg, timeout = 15000) {
   }
 }
 
+const ADMIN = randomUUID();
+
 // ---- server -------------------------------------------------------------
 const server = spawn("python3", [path.join(root, "server.py"), "--port", String(PORT), "--data", path.join(tmp, "data"), "--log", path.join(tmp, "server.log")],
-  { env: { ...process.env, ROOMS_ADMIN_TOKEN: "e2e-token" }, stdio: ["ignore", "pipe", "pipe"] });
+  { env: { ...process.env, ROOMS_ADMIN_TOKEN: ADMIN }, stdio: ["ignore", "pipe", "pipe"] });
 await new Promise((resolve, reject) => {
   server.stdout.on("data", (d) => { if (String(d).includes("READY")) resolve(); });
   server.stderr.on("data", (d) => process.stderr.write(d));
@@ -187,9 +190,9 @@ try {
   check(true, "rejoin after reload works");
 
   // 9. room full + admin close
-  const status = await fetch(`${BASE}/api/status`, { headers: { "X-Admin-Token": "e2e-token" } }).then((r) => r.json());
+  const status = await fetch(`${BASE}/api/status`, { headers: { "X-Admin-Token": ADMIN } }).then((r) => r.json());
   check(status.rooms.find((r) => r.code === ROOM).peers.length === 2, "admin status lists 2 peers");
-  await fetch(`${BASE}/api/admin/rooms/${ROOM}/close`, { method: "POST", headers: { "X-Admin-Token": "e2e-token" } });
+  await fetch(`${BASE}/api/admin/rooms/${ROOM}/close`, { method: "POST", headers: { "X-Admin-Token": ADMIN } });
   await waitFor(() => C.locator("#left:not(.hidden)").count(), "C kicked to left screen on close");
   check((await C.locator("#left-title").textContent()).includes("ended"), "close shows 'Meeting ended'");
 
