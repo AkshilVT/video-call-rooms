@@ -614,7 +614,11 @@ class Handler(BaseHTTPRequestHandler):
         log.debug("%s %s", self.address_string(), fmt % args)
 
     def log_error(self, fmt, *args):
-        log.info("%s %s", self.address_string(), fmt % args)
+        msg = fmt % args
+        if "timed out" in msg:                 # idle keep-alive connection reaped: normal, not an error
+            log.debug("%s %s", self.address_string(), msg)
+        else:
+            log.info("%s %s", self.address_string(), msg)
 
     def _origin_ok(self, origin):
         if not origin:
