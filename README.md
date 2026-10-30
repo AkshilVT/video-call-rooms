@@ -37,6 +37,30 @@ Mesh means every extra participant costs everyone a bit more upload and CPU.
 It is tuned for 2–8 people (the cap is configurable up to 16; past ~8 a real
 SFU is the right tool).
 
+## Why not a thin client on Google Meet's backend?
+
+Evaluated and rejected. There is no supported or practical way for a custom
+lightweight client to join a Meet call as a participant:
+
+- **Meet REST API** creates spaces and reads conference records only. No media.
+- **Meet Media API** is receive-only (audio/video *out* of a conference, for
+  transcription-style apps). It needs a Cloud project, Workspace account,
+  consent from someone in the call, and cannot send mic or camera.
+- **Meet Add-ons SDK** runs inside the Meet web client, not instead of it.
+- **SIP/H.323 interop** works from a standards client but requires Workspace
+  Enterprise plus a paid Pexip gateway, and is dial-in only.
+- **Reverse-engineering the web client's signaling** (obfuscated protobuf RPCs
+  over the Google frontend, Google's own SFU) is undocumented, rotates with
+  releases, breaks on bot detection and violates the Workspace terms. Every
+  public "Meet bot" drives a full Chrome instance with Puppeteer, which is
+  heavier than Meet itself.
+
+Meet's memory cost is mostly its client: VP9 software encode, three simulcast
+layers, blur/captions ML, and the app bundle. That cost cannot be avoided
+while still speaking to Google's SFU. This app avoids it by owning the media
+path. If mesh stops scaling (8+ people), the upgrade is a self-hosted SFU
+such as LiveKit or Jitsi with the same thin client, not Meet.
+
 ## Reachability
 
 Browsers only allow camera and microphone on HTTPS (or localhost), so guests
